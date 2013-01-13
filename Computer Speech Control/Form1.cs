@@ -23,7 +23,9 @@ namespace Computer_Speech_Control
     {
         WaveIn waveIn;
         WaveFileWriter writer;
-        Stream stream = new MemoryStream();
+        List<byte[]> history_bytes = new List<byte[]>();
+
+        int rec_times = 0;
 
         string result = "";
 
@@ -43,12 +45,18 @@ namespace Computer_Speech_Control
 
         void waveIn_DataAvailable(object sender, WaveInEventArgs e)
         {
+            if (writeToFile == 1)
+            {
+                rec_times++;
+            }
+
             for (int index = 0; index < e.BytesRecorded; index += 2)
             {
                 short sample = (short)((e.Buffer[index + 1] << 8) |
                                         e.Buffer[index + 0]);
                 float sample32 = sample / 32768f;
                 ProcessSample(sample32);
+
                 writer.WriteSample(sample32);
             }
         }
@@ -81,65 +89,65 @@ namespace Computer_Speech_Control
                 writer.Close();
                 writer = null;
 
+                int bytes_to_read = (rec_times + 1) * 6400;
+                byte[] wav_bytes = new byte[bytes_to_read];
+
+                WaveFileReader wfr = new WaveFileReader("file.wav");
+
+                if (wfr.Length < bytes_to_read)
+                {
+                    wfr.Read(wav_bytes, 0, (int)wfr.Length);
+                }
+                else
+                {
+                    wfr.Position = wfr.Length - 1 - bytes_to_read;
+                    wfr.Read(wav_bytes, 0, bytes_to_read);
+                    
+                }
+                wfr.Dispose();
+                wfr.Close();
+
+                WaveIn second_waveIn = new WaveIn();
+                second_waveIn.DeviceNumber = 0;
+                second_waveIn.WaveFormat = new WaveFormat(16000, 2);
+                WaveFileWriter second_writer = new WaveFileWriter("cmd.wav", second_waveIn.WaveFormat);
+                second_waveIn.StartRecording();
+                second_writer.Write(wav_bytes, 0, bytes_to_read);
+                second_waveIn.StopRecording();
+
+                second_waveIn.Dispose();
+                second_waveIn = null;
+                second_writer.Close();
+                second_writer = null;
+
                 listBox1.Items.Add("CONVERTING");
                 listBox1.SelectedIndex = listBox1.Items.Count - 1;
 
-                Wav2Flac("file.wav", "file.flac");
+                Wav2Flac("cmd.wav", "file.flac");
 
-                string res = GoogleSpeechRequest(16000);
+                result = GoogleSpeechRequest(16000);
+                string res = result;
                 int k = res.IndexOf("utterance\":\"") + "utterance\":\"".Length;
                 int k1 = res.IndexOf("\"", k + 1);
                 string cmd = res.Substring(k, k1 - k);
-                listBox1.Items.Add(cmd);
+                listBox1.Items.Add("RECOGNIZED");
+                richTextBox1.Text += cmd + "\n";
 
-                File.Delete("file.wav");
+
+
+                File.Delete("cmd.wav");
+                rec_times = 0;
+                writeToFile = 0;
             }
             else
-                if (writeToFile == 3)
+
+                if (writeToFile == 0)
                 {
                     waveIn.Dispose();
                     waveIn = null;
                     writer.Close();
                     writer = null;
-
-                    listBox1.Items.Add("CONVERTING");
-                    listBox1.SelectedIndex = listBox1.Items.Count - 1;
-
-                    Wav2Flac("file.wav", "file.flac");
-
-                    string res = GoogleSpeechRequest(16000);
-                    int k = res.IndexOf("utterance\":\"") + "utterance\":\"".Length;
-                    int k1 = res.IndexOf("\"", k + 1);
-                    string cmd = res.Substring(k, k1 - k);
-                    listBox1.Items.Add(cmd);
-
-                    File.Delete("file.wav");
-
-                    writeToFile = 0;
                 }
-                else
-                    if (writeToFile == -1)
-                    {
-                        waveIn.Dispose();
-                        waveIn = null;
-                        writer.Close();
-                        writer = null;
-                        stream.Dispose();
-                        stream = new MemoryStream();
-                        writeToFile = 1;
-                        tick_count = 0;
-                    }
-                    else
-
-                        if (writeToFile == 0)
-                        {
-                            waveIn.Dispose();
-                            waveIn = null;
-                            writer.Close();
-                            writer = null;
-                            stream.Dispose();
-                            stream = new MemoryStream();
-                        }
         }
 
         public static int Wav2Flac(String wavName, string flacName)
@@ -147,6 +155,30 @@ namespace Computer_Speech_Control
             int sampleRate = 0;
 
             IAudioSource audioSource = new WAVReader(wavName, null);
+
+            AudioBuffer buff = new AudioBuffer(audioSource, 0x10000);
+
+            FlakeWriter flakewriter = new FlakeWriter(flacName, audioSource.PCM);
+            sampleRate = audioSource.PCM.SampleRate;
+
+            FlakeWriter audioDest = flakewriter;
+            while (audioSource.Read(buff, -1) != 0)
+            {
+                audioDest.Write(buff);
+            }
+
+            audioDest.Close();
+            audioSource.Close();
+
+            return sampleRate;
+        }
+
+        public static int Wav2Flac(Stream streamName, string flacName)
+        {
+            int sampleRate = 0;
+
+            IAudioSource audioSource = new WAVReader(null, streamName);
+
             AudioBuffer buff = new AudioBuffer(audioSource, 0x10000);
 
             FlakeWriter flakewriter = new FlakeWriter(flacName, audioSource.PCM);
@@ -202,40 +234,20 @@ namespace Computer_Speech_Control
 
                 try
                 {
-                    if (writeToFile == 0)
-                    {
-                        waveIn = new WaveIn();
+                    waveIn = new WaveIn();
 
-                        waveIn.DeviceNumber = 0;
+                    waveIn.DeviceNumber = 0;
 
-                        waveIn.DataAvailable += waveIn_DataAvailable;
-                        waveIn.RecordingStopped += new EventHandler<StoppedEventArgs>(waveIn_RecordingStopped);
+                    waveIn.DataAvailable += waveIn_DataAvailable;
+                    waveIn.RecordingStopped += new EventHandler<StoppedEventArgs>(waveIn_RecordingStopped);
 
-                        waveIn.WaveFormat = new WaveFormat(16000, 2);
-                        writer = new WaveFileWriter(stream, waveIn.WaveFormat);
+                    waveIn.WaveFormat = new WaveFormat(16000, 2);
+                    writer = new WaveFileWriter("file.wav", waveIn.WaveFormat);
 
-                        listBox1.Items.Add("RECORDING TO STREAM");
-                        listBox1.SelectedIndex = listBox1.Items.Count - 1;
+                    listBox1.Items.Add("RECORDING TO FILE");
+                    listBox1.SelectedIndex = listBox1.Items.Count - 1;
 
-                        waveIn.StartRecording();
-                    }
-                    else
-                        if (writeToFile == 1)
-                        {
-                            waveIn = new WaveIn();
-                            waveIn.DeviceNumber = 0;
-
-                            waveIn.DataAvailable += waveIn_DataAvailable;
-                            waveIn.RecordingStopped += new EventHandler<StoppedEventArgs>(waveIn_RecordingStopped);
-
-                            waveIn.WaveFormat = new WaveFormat(16000, 2);
-                            writer = new WaveFileWriter("file.wav", waveIn.WaveFormat);
-
-                            listBox1.Items.Add("RECORDING TO FILE");
-                            listBox1.SelectedIndex = listBox1.Items.Count - 1;
-
-                            waveIn.StartRecording();
-                        }
+                    waveIn.StartRecording();
                 }
                 catch (Exception ex)
                 {
@@ -258,39 +270,54 @@ namespace Computer_Speech_Control
                     }
                     else
                     {
-                        listBox1.Items.Add("VOLUME LOST. STOP WRITING TO FILE");
+                        listBox1.Items.Add("VOLUME LOST. END.");
                         listBox1.SelectedIndex = listBox1.Items.Count - 1;
                         waveIn.StopRecording();
-                        writeToFile = 3;
+                        tick_count = 0;
+                        //writeToFile = 3;
                     }
                 }
                 else
-                    if (writeToFile == -1)
+                    if (writeToFile == 0)
                     {
-                        waveIn.StopRecording();
-                    }
-                    else
-                        if (writeToFile == 0)
+                        if (volume > volume_level)
                         {
-                            if (volume > volume_level)
-                            {
-                                listBox1.Items.Add("VOLUME > VOLUME_LEVEL: " + volume);
-                                listBox1.SelectedIndex = listBox1.Items.Count - 1;
-                                writeToFile = -1;
-                            }
-                            if (stream.Length >= 1024 * 512)
-                            {
-                                listBox1.Items.Add("reset stream: " + stream.Length);
-                                listBox1.SelectedIndex = listBox1.Items.Count - 1;
-                                waveIn.StopRecording();
-                            }
+                            listBox1.Items.Add("VOLUME > VOLUME_LEVEL: " + volume);
+                            listBox1.SelectedIndex = listBox1.Items.Count - 1;
+                            writeToFile = 1;
                         }
+                        if ((new FileInfo("file.wav")).Length >= 1024 * 1024 * 5)
+                        {
+                            listBox1.Items.Add("reset wav file");
+                            listBox1.SelectedIndex = listBox1.Items.Count - 1;
+                            waveIn.StopRecording();
+                        }
+                    }
             }
         }
 
         private void numericUpDown1_ValueChanged(object sender, EventArgs e)
         {
             volume_level = (int)numericUpDown1.Value;
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            waveIn = new WaveIn();
+
+            waveIn.DeviceNumber = 0;
+
+            waveIn.DataAvailable += waveIn_DataAvailable;
+            waveIn.RecordingStopped += new EventHandler<StoppedEventArgs>(waveIn_RecordingStopped);
+
+            waveIn.WaveFormat = new WaveFormat(16000, 2);
+            writer = new WaveFileWriter("file.wav", waveIn.WaveFormat);
+
+            listBox1.Items.Add("RECORDING TO FILE");
+            listBox1.SelectedIndex = listBox1.Items.Count - 1;
+
+            waveIn.StartRecording();
+            timer1.Enabled = true;
         }
     }
 }
